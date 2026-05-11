@@ -1,8 +1,8 @@
 name: Sync Garmin to Notion
 
 on:
-  schedule:
-    - cron: '0 12 * * 0' # every Sunday BJ 20:00
+  #schedule:
+   # - cron: '0 12 * * 0' # every Sunday BJ 20:00
   workflow_dispatch:  # manual
 
 env:
