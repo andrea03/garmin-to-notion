@@ -77,7 +77,7 @@ This project is licensed under the MIT License. See the LICENSE file for more de
 
 The workflow runs all four datasets using one Garmin login and a shared,
 rate-limited Notion client. Configure all four database secrets listed above.
-It runs daily at 08:17 and 20:17 Asia/Shanghai, and can also be run manually.
+It runs every Sunday at 20:00 Asia/Shanghai, and can also be run manually.
 
 Steps and sleep resume from seven days before the latest stored date through
 today, updating existing days as well as filling missing ones. An empty database
