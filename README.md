@@ -33,12 +33,21 @@ For more advanced users, follow these steps to set up the integration:
 * Environment secrets to define:
   * GARMIN_EMAIL
   * GARMIN_PASSWORD
+  * GARMINTOKENS (optional, the contents of the new Garmin client's `garmin_tokens.json` to reuse a saved session)
   * NOTION_TOKEN
   * NOTION_DB_ID
   * NOTION_PR_DB_ID
   * NOTION_STEPS_DB_ID (optional)
   * NOTION_SLEEP_DB_ID (optional)
 ### 5. Run Scripts (if not using automatic workflow)
+Use Python 3.12 or later and install dependencies with `python -m pip install -r requirements.txt`.
+The Garmin client now uses a different sign-in flow. If you have a saved session
+from the older garth-based client, sign in again to create a new session.
+For local runs, set `GARMINTOKENS=~/.garminconnect` to save and reuse the
+session. To reuse it in GitHub Actions, add the JSON file contents as the
+optional repository secret above. If the saved session stops working, replace
+the secret with a fresh session.
+
 * Run [garmin-activities.py](https://github.com/chloevoyer/garmin-to-notion/blob/main/garmin-activities.py) to sync your Garmin activities to Notion.  
 `python garmin-activities.py`
 * Run [person-records.py](https://github.com/chloevoyer/garmin-to-notion/blob/main/personal-records.py) to extract activity records (e.g., fastest run, longest ride).  

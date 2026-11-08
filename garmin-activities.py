@@ -3,7 +3,7 @@ from datetime import datetime, UTC, timedelta
 
 import pytz
 from dotenv import load_dotenv
-from garminconnect import Garmin as GarminClient
+from garminconnect import Garmin as GarminClient, GarminConnectTooManyRequestsError
 from notion_client import Client as NotionClient
 
 # Your local time zone, replace with the appropriate one if needed
@@ -294,11 +294,14 @@ def main():
     garmin_password = os.getenv("GARMIN_PASSWORD")
     notion_token = os.getenv("NOTION_TOKEN")
     database_id = os.getenv("NOTION_DB_ID")
-    garmin_fetch_limit = int(os.getenv("GARMIN_ACTIVITIES_FETCH_LIMIT", "1000"))
+    garmin_fetch_limit = int(os.getenv("GARMIN_ACTIVITIES_FETCH_LIMIT") or "1000")
 
     # Initialize Garmin client and login
     garmin_client = GarminClient(garmin_email, garmin_password)
-    garmin_client.login()
+    try:
+        garmin_client.login()
+    except GarminConnectTooManyRequestsError:
+        raise SystemExit("Garmin rejected the login with a rate limit. Wait before retrying.") from None
     notion_client = NotionClient(auth=notion_token)
 
     # Get all activities
