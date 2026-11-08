@@ -8,6 +8,10 @@ on:
 env:
   TZ: 'America/Montreal'
 
+concurrency:
+  group: garmin-to-notion-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
