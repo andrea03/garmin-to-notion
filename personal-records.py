@@ -1,6 +1,7 @@
-from datetime import date, datetime
+from datetime import datetime, UTC
+from dotenv import load_dotenv
 from garminconnect import Garmin
-from notion_client import Client
+from sync_common import RateLimitedNotionClient as Client, sync_dates, all_rows
 import os
 
 def get_icon_for_record(activity_name):
@@ -48,6 +49,14 @@ def format_activity_name(activity_name):
     return activity_name
 
 def format_garmin_value(value, activity_type, typeId):
+    if typeId in (5, 6):
+        distance = 21.0975 if typeId == 5 else 42.195
+        seconds = round(value)
+        pace_seconds = round(value / distance)
+        return (
+            f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}",
+            f"{pace_seconds // 60}:{pace_seconds % 60:02d} /km",
+        )
     if typeId  == 1:  # 1K
         total_seconds = round(value)  # Round to the nearest second
         minutes = total_seconds // 60
@@ -145,6 +154,8 @@ def replace_activity_name_by_typeId(typeId):
         2: "1mi",
         3: "5K",
         4: "10K",
+        5: "Half Marathon",
+        6: "Marathon",
         7: "Longest Run",
         8: "Longest Ride",
         9: "Total Ascent",
@@ -156,138 +167,78 @@ def replace_activity_name_by_typeId(typeId):
     }
     return typeId_name_map.get(typeId, "Unnamed Activity")
 
-def get_existing_record(client, database_id, activity_name):
-    query = client.databases.query(
-        database_id=database_id,
-        filter={
-            "and": [
-                {"property": "Record", "title": {"equals": activity_name}},
-                {"property": "PR", "checkbox": {"equals": True}}
-            ]
+
+def record_time(value):
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC).replace(second=0, microsecond=0)
+
+
+def main(garmin=None, client=None):
+    load_dotenv()
+    database_id = os.environ["NOTION_PR_DB_ID"]
+    if garmin is None:
+        garmin = Garmin(os.getenv("GARMIN_EMAIL"), os.getenv("GARMIN_PASSWORD"))
+        garmin.login()
+    if client is None:
+        client = Client(auth=os.environ["NOTION_TOKEN"])
+
+    records = garmin.get_personal_record(include_history=False)
+    if not isinstance(records, list) or not records:
+        raise ValueError("Garmin returned no usable personal records; existing records were preserved")
+    # Validate the whole response before changing current-record flags.
+    current = {}
+    for record in records:
+        type_id = record["typeId"]
+        if type_id == 16:
+            continue
+        name = replace_activity_name_by_typeId(type_id)
+        if name == "Unnamed Activity":
+            raise ValueError(f"Unsupported Garmin personal record type: {type_id}")
+        if type_id in current:
+            raise ValueError(f"Multiple current Garmin records for type {type_id}")
+        record_time(record["prStartTimeGmtFormatted"])
+        value, pace = format_garmin_value(record["value"], record.get("activityType"), type_id)
+        current[type_id] = (record, name, value, pace)
+
+    rows = all_rows(client, database_id)
+    selected_ids = set()
+    for type_id, (record, name, value, pace) in current.items():
+        timestamp = record_time(record["prStartTimeGmtFormatted"])
+        match = None
+        for row in rows:
+            props = row["properties"]
+            old_date = props["Date"].get("date")
+            if props["typeId"]["number"] == type_id and old_date and record_time(old_date["start"]) == timestamp:
+                match = row
+                break
+        properties = {
+            "Date": {"date": {"start": timestamp.isoformat()}},
+            "Record": {"title": [{"text": {"content": name}}]},
+            "Activity Type": {"select": {"name": format_activity_type(record.get("activityType"))}},
+            "typeId": {"number": type_id},
+            "Value": {"rich_text": [{"text": {"content": value}}]},
+            "Pace": {"rich_text": [{"text": {"content": pace}}]} if pace else {"rich_text": []},
+            "PR": {"checkbox": True},
         }
-    )
-    return query['results'][0] if query['results'] else None
-
-def get_record_by_date_and_name(client, database_id, activity_date, activity_name):
-    query = client.databases.query(
-        database_id=database_id,
-        filter={
-            "and": [
-                {"property": "Record", "title": {"equals": activity_name}},
-                {"property": "Date", "date": {"equals": activity_date}}
-            ]
-        }
-    )
-    return query['results'][0] if query['results'] else None
-
-def update_record(client, page_id, activity_date, value, pace, activity_name, is_pr=True):
-    properties = {
-        "Date": {"date": {"start": activity_date}},
-        "PR": {"checkbox": is_pr}
-    }
-    
-    if value:
-        properties["Value"] = {"rich_text": [{"text": {"content": value}}]}
-    
-    if pace:
-        properties["Pace"] = {"rich_text": [{"text": {"content": pace}}]}
-
-    icon = get_icon_for_record(activity_name)
-    cover = get_cover_for_record(activity_name)
-
-    try:
-        client.pages.update(
-            page_id=page_id,
-            properties=properties,
-            icon={"emoji": icon},
-            cover={"type": "external", "external": {"url": cover}}
-        )
-        
-    except Exception as e:
-        print(f"Error updating record: {e}")
-
-def write_new_record(client, database_id, activity_date, activity_type, activity_name, typeId, value, pace):
-    properties = {
-        "Date": {"date": {"start": activity_date}},
-        "Activity Type": {"select": {"name": activity_type}},
-        "Record": {"title": [{"text": {"content": activity_name}}]},
-        "typeId": {"number": typeId},
-        "PR": {"checkbox": True}
-    }
-    
-    if value:
-        properties["Value"] = {"rich_text": [{"text": {"content": value}}]}
-    
-    if pace:
-        properties["Pace"] = {"rich_text": [{"text": {"content": pace}}]}
-    
-    icon = get_icon_for_record(activity_name)
-    cover = get_cover_for_record(activity_name)
-
-    try:
-        client.pages.create(
-            parent={"database_id": database_id},
-            properties=properties,
-            icon={"emoji": icon},
-            cover={"type": "external", "external": {"url": cover}}
-        )
-    except Exception as e:
-        print(f"Error writing new record: {e}")
-
-def main():
-    garmin_email = os.getenv("GARMIN_EMAIL")
-    garmin_password = os.getenv("GARMIN_PASSWORD")
-    notion_token = os.getenv("NOTION_TOKEN")
-    database_id = os.getenv("NOTION_PR_DB_ID")
-
-    garmin = Garmin(garmin_email, garmin_password)
-    garmin.login()
-
-    client = Client(auth=notion_token)
-
-    records = garmin.get_personal_record()
-    filtered_records = [record for record in records if record.get('typeId') != 16]
-
-    for record in filtered_records:
-        activity_date = record.get('prStartTimeGmtFormatted')
-        activity_type = format_activity_type(record.get('activityType'))
-        activity_name = replace_activity_name_by_typeId(record.get('typeId'))
-        typeId = record.get('typeId', 0)
-        value, pace = format_garmin_value(record.get('value', 0), activity_type, typeId)
-
-        existing_pr_record = get_existing_record(client, database_id, activity_name)
-        existing_date_record = get_record_by_date_and_name(client, database_id, activity_date, activity_name)
-
-        if existing_date_record:
-            update_record(client, existing_date_record['id'], activity_date, value, pace, activity_name, True)
-            print(f"Updated existing record: {activity_type} - {activity_name}")
-        elif existing_pr_record:
-            # Add error handling here
-            try:
-                date_prop = existing_pr_record['properties']['Date']
-                if date_prop and date_prop.get('date') and date_prop['date'].get('start'):
-                    existing_date = date_prop['date']['start']
-                    
-                    if activity_date > existing_date:
-                        update_record(client, existing_pr_record['id'], existing_date, None, None, activity_name, False)
-                        print(f"Archived old record: {activity_type} - {activity_name}")
-                        
-                        write_new_record(client, database_id, activity_date, activity_type, activity_name, typeId, value, pace)
-                        print(f"Created new PR record: {activity_type} - {activity_name}")
-                    else:
-                        print(f"No update needed: {activity_type} - {activity_name}")
-                else:
-                    # Handle case where date is missing or improperly formatted
-                    print(f"Warning: Record {activity_name} has invalid date format - updating anyway")
-                    update_record(client, existing_pr_record['id'], activity_date, value, pace, activity_name, True)
-            except (KeyError, TypeError) as e:
-                print(f"Error processing record {activity_name}: {e}")
-                print(f"Record data: {existing_pr_record['properties']}")
-                # Fallback - create new record if we can't process the existing one properly
-                write_new_record(client, database_id, activity_date, activity_type, activity_name, typeId, value, pace)
+        if match:
+            saved = client.pages.update(page_id=match["id"], properties=properties)
         else:
-            write_new_record(client, database_id, activity_date, activity_type, activity_name, typeId, value, pace)
-            print(f"Successfully written new record: {activity_type} - {activity_name}")
+            saved = client.pages.create(parent={"database_id": database_id}, properties=properties,
+                                        icon={"emoji": get_icon_for_record(name)})
+        selected_ids.add(saved["id"])
+
+    # Mark historical/template rows as non-current only after all current records
+    # have been saved. A failed run can safely resume on the next invocation.
+    for row in rows:
+        props = row["properties"]
+        if row["id"] not in selected_ids and props["PR"]["checkbox"]:
+            type_id = props["typeId"]["number"]
+            if replace_activity_name_by_typeId(type_id) != "Unnamed Activity":
+                client.pages.update(page_id=row["id"], properties={"PR": {"checkbox": False}})
+    print(f"Synced {len(current)} current personal records.", flush=True)
+
 
 if __name__ == '__main__':
     main()

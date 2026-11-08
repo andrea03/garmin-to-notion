@@ -71,3 +71,23 @@ Contributions are welcome! If you find a bug or want to add a feature, feel free
 
 ## :copyright: License  
 This project is licensed under the MIT License. See the LICENSE file for more details.
+
+
+## Full Fitness Tracker sync
+
+The workflow runs all four datasets using one Garmin login and a shared,
+rate-limited Notion client. Configure all four database secrets listed above.
+It runs daily at 08:17 and 20:17 Asia/Shanghai, and can also be run manually.
+
+Steps and sleep resume from seven days before the latest stored date through
+today, updating existing days as well as filling missing ones. An empty database
+starts with the last 30 days. To repair older gaps or existing sleep time labels,
+enter a YYYY-MM-DD date in the manual workflow's start_date input. For this
+tracker, use 2026-02-09 for the first historical repair run. Subsequent runs can
+leave it empty. Sleep days without available sleep data are skipped.
+
+Personal Records uses Garmin's current records, matches existing rows by typeId
+and date, and corrects names and values including half marathon and marathon.
+Previous/template rows for supported types are retained with PR unchecked once
+the current records have been saved. Garmin records must already be accepted
+in Garmin Connect; the script does not calculate new records from Activities.

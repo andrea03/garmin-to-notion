@@ -1,12 +1,18 @@
 name: Sync Garmin to Notion
 
 on:
-  #schedule:
-   # - cron: '0 12 * * 0' # every Sunday BJ 20:00
-  workflow_dispatch:  # manual
+  schedule:
+    - cron: '17 0,12 * * *' # Beijing 08:17 and 20:17
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: 'Optional steps/sleep backfill start date (YYYY-MM-DD)'
+        required: false
+        default: ''
+        type: string
 
 env:
-  TZ: 'America/Montreal'
+  TZ: 'Asia/Shanghai'
 
 concurrency:
   group: garmin-to-notion-sync
@@ -47,6 +53,7 @@ jobs:
           NOTION_STEPS_DB_ID: ${{ secrets.NOTION_STEPS_DB_ID }}
           NOTION_SLEEP_DB_ID: ${{ secrets.NOTION_SLEEP_DB_ID }}
           GARMIN_ACTIVITIES_FETCH_LIMIT: ${{ vars.GARMIN_ACTIVITIES_FETCH_LIMIT }}
-          TZ: 'America/Montreal'
+          SYNC_START_DATE: ${{ inputs.start_date }}
+          TZ: 'Asia/Shanghai'
         run: |
-          python garmin-activities.py
+          python -u sync_all.py

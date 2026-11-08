@@ -1,12 +1,13 @@
 from datetime import datetime
 from garminconnect import Garmin
-from notion_client import Client
+from sync_common import RateLimitedNotionClient as Client, sync_dates, all_rows
 from dotenv import load_dotenv, dotenv_values
 import pytz
 import os
+import time
 
 # Constants
-local_tz = pytz.timezone("America/New_York")
+local_tz = pytz.timezone("Asia/Shanghai")
 
 # Load environment variables
 load_dotenv()
@@ -43,7 +44,7 @@ def sleep_data_exists(client, database_id, sleep_date):
     results = query.get('results', [])
     return results[0] if results else None  # Ensure it returns None instead of causing IndexError
 
-def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
+def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True, existing=None):
     daily_sleep = sleep_data.get('dailySleepDTO', {})
     if not daily_sleep:
         return
@@ -64,10 +65,10 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
         "Long Date": {"date": {"start": sleep_date}},
         "Full Date/Time": {"date": {"start": format_time(daily_sleep.get('sleepStartTimestampGMT')), "end": format_time(daily_sleep.get('sleepEndTimestampGMT'))}},
         "Total Sleep (h)": {"number": round(total_sleep / 3600, 1)},
-        "Light Sleep (h)": {"number": round(daily_sleep.get('lightSleepSeconds', 0) / 3600, 1)},
-        "Deep Sleep (h)": {"number": round(daily_sleep.get('deepSleepSeconds', 0) / 3600, 1)},
-        "REM Sleep (h)": {"number": round(daily_sleep.get('remSleepSeconds', 0) / 3600, 1)},
-        "Awake Time (h)": {"number": round(daily_sleep.get('awakeSleepSeconds', 0) / 3600, 1)},
+        "Light Sleep (h)": {"number": round((daily_sleep.get('lightSleepSeconds') or 0) / 3600, 1)},
+        "Deep Sleep (h)": {"number": round((daily_sleep.get('deepSleepSeconds') or 0) / 3600, 1)},
+        "REM Sleep (h)": {"number": round((daily_sleep.get('remSleepSeconds') or 0) / 3600, 1)},
+        "Awake Time (h)": {"number": round((daily_sleep.get('awakeSleepSeconds') or 0) / 3600, 1)},
         "Total Sleep": {"rich_text": [{"text": {"content": format_duration(total_sleep)}}]},
         "Light Sleep": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('lightSleepSeconds', 0))}}]},
         "Deep Sleep": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('deepSleepSeconds', 0))}}]},
@@ -76,10 +77,13 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
         "Resting HR": {"number": sleep_data.get('restingHeartRate', 0)}
     }
     
-    client.pages.create(parent={"database_id": database_id}, properties=properties, icon={"emoji": "😴"})
-    print(f"Created sleep entry for: {sleep_date}")
+    if existing:
+        client.pages.update(page_id=existing["id"], properties=properties)
+    else:
+        client.pages.create(parent={"database_id": database_id}, properties=properties, icon={"emoji": "😴"})
+    print(f"Synced sleep entry for: {sleep_date}", flush=True)
 
-def main():
+def main(garmin=None, client=None):
     load_dotenv()
 
     # Initialize Garmin and Notion clients using environment variables
@@ -89,15 +93,21 @@ def main():
     database_id = os.getenv("NOTION_SLEEP_DB_ID")
 
     # Initialize Garmin client and login
-    garmin = Garmin(garmin_email, garmin_password)
-    garmin.login()
-    client = Client(auth=notion_token)
+    if garmin is None:
+        garmin = Garmin(garmin_email, garmin_password)
+        garmin.login()
+    if client is None:
+        client = Client(auth=notion_token)
 
-    data = get_sleep_data(garmin)
-    if data:
-        sleep_date = data.get('dailySleepDTO', {}).get('calendarDate')
-        if sleep_date and not sleep_data_exists(client, database_id, sleep_date):
-            create_sleep_data(client, database_id, data, skip_zero_sleep=True)
+    for day in sync_dates(client, database_id, "Long Date"):
+        time.sleep(0.4)
+        data = garmin.get_sleep_data(day.isoformat())
+        if data:
+            sleep_date = data.get('dailySleepDTO', {}).get('calendarDate')
+            if sleep_date:
+                existing = sleep_data_exists(client, database_id, sleep_date)
+                create_sleep_data(client, database_id, data, existing=existing)
+
 
 if __name__ == '__main__':
     main()

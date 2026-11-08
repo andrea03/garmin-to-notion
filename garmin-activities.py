@@ -1,40 +1,13 @@
 import os
-import json
-import random
-import time
 from datetime import datetime, UTC, timedelta
 
 import pytz
 from dotenv import load_dotenv
 from garminconnect import Garmin as GarminClient, GarminConnectTooManyRequestsError
 from notion_client import Client as NotionClient
-from notion_client.errors import APIResponseError
 
 
-class RateLimitedNotionClient(NotionClient):
-    """Pace all sync requests and retry explicit Notion throttling responses."""
-
-    def request(self, path, method, query=None, body=None, auth=None):
-        for attempt in range(6):
-            # This sync is sequential. Include reads and writes in the same budget.
-            time.sleep(0.4)
-            try:
-                return super().request(path, method, query, body, auth)
-            except APIResponseError as error:
-                reason = json.loads(error.body).get("additional_data", {}).get("rate_limit_reason")
-                if (
-                    error.status not in (429, 529)
-                    or reason == "public_api_request_blocked"
-                    or attempt == 5
-                ):
-                    raise
-                try:
-                    retry_after = max(0, int(error.headers.get("Retry-After", "0")))
-                except ValueError:
-                    retry_after = 0
-                delay = max(retry_after, 2 ** attempt) + random.uniform(0, 0.25)
-                print(f"Notion rate limited; waiting {delay:.1f}s before retry {attempt + 1}/5.", flush=True)
-                time.sleep(delay)
+from sync_common import RateLimitedNotionClient
 
 # Your local time zone, replace with the appropriate one if needed
 local_tz = pytz.timezone('America/Toronto')
@@ -316,7 +289,7 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
     notion_client.pages.update(**update)
 
 
-def main():
+def main(garmin_client=None, notion_client=None):
     load_dotenv()
 
     # Initialize Garmin and Notion clients using environment variables
@@ -326,13 +299,14 @@ def main():
     database_id = os.getenv("NOTION_DB_ID")
     garmin_fetch_limit = int(os.getenv("GARMIN_ACTIVITIES_FETCH_LIMIT") or "1000")
 
-    # Initialize Garmin client and login
-    garmin_client = GarminClient(garmin_email, garmin_password)
-    try:
-        garmin_client.login()
-    except GarminConnectTooManyRequestsError:
-        raise SystemExit("Garmin rejected the login with a rate limit. Wait before retrying.") from None
-    notion_client = RateLimitedNotionClient(auth=notion_token)
+    if garmin_client is None:
+        garmin_client = GarminClient(garmin_email, garmin_password)
+        try:
+            garmin_client.login()
+        except GarminConnectTooManyRequestsError:
+            raise SystemExit("Garmin rejected the login with a rate limit. Wait before retrying.") from None
+    if notion_client is None:
+        notion_client = RateLimitedNotionClient(auth=notion_token)
 
     # Get all activities
     activities = get_all_activities(garmin_client, garmin_fetch_limit)
